@@ -1,0 +1,28 @@
+/* ScoreBoard.css */
+
+.scoreboard {
+  width: 220px;
+  text-align: center;
+}
+
+.red-team {
+  margin-right: 20px;
+}
+
+.blue-team {
+  margin-left: 20px;
+}
+
+.red-team .player-info {
+  border: 1px solid red;
+  padding: 10px;
+  border-radius: 5px;
+  margin-bottom: 10px;
+}
+
+.blue-team .player-info {
+  border: 1px solid rgb(0, 140, 255);
+  padding: 10px;
+  border-radius: 5px;
+  margin-bottom: 10px;
+}

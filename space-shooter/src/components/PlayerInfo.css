@@ -1,0 +1,25 @@
+.player-info {
+  margin-bottom: 20px;
+}
+
+.nickname.red {
+  text-shadow: 0px 0px 8px red;
+}
+
+.nickname.blue {
+  text-shadow: 0px 0px 8px blue;
+}
+
+.health-bar-container {
+  background-color: grey;
+  width: 100%;
+  height: 10px;
+  border-radius: 5px;
+  margin: 5px 0;
+}
+
+.health-bar {
+  background-color: rgb(0, 255, 0);
+  height: 100%;
+  border-radius: 5px;
+}
