@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+// Basic vector for positions and velocities
+message Vec2 {
+  float x = 1;
+  float y = 2;
+}
+
+// Player state information
+message Player {
+  string id = 1;        // socket.id
+  string nickname = 2;
+  string team = 3;      // "red" or "blue"
+  Vec2 position = 4;
+  float angle = 5;
+  Vec2 velocity = 6;
+  int32 health = 7;
+  int32 score = 8;
+  int32 death_count = 9;
+}
+
+// Projectile state information
+message Projectile {
+  int64 id = 1;         // Unique projectile ID
+  string owner_id = 2;  // ID of the player who shot it
+  Vec2 position = 3;
+  Vec2 direction = 4;   // Current direction vector
+}
+
+// For sending only ID and new position for moved projectiles
+message MovedProjectileUpdate {
+    int64 id = 1;
+    Vec2 position = 2;
+}
+
+// The main message for game state delta updates
+message GameDeltaUpdate {
+  map<string, Player> players = 1;               // Key: player_id, Value: Player state
+  repeated Projectile new_projectiles = 2;       // List of newly created projectiles
+  repeated int64 destroyed_projectile_ids = 3; // List of IDs for projectiles that were destroyed
+  repeated MovedProjectileUpdate moved_projectiles = 4; // List of projectiles that moved
+}
+
+// For initial state send to a new player
+message InitialGameState {
+    map<string, Player> all_players = 1;
+    repeated Projectile all_projectiles = 2;
+    string your_id = 3;
+}
