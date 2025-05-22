@@ -7,7 +7,7 @@ const respawnTimeSeconds = 3;
 
 const shipHeight = 32;
 const shipWidth = 32;
-const shipAngularSpeed = 0.2;
+const shipAngularSpeed = 0.4;
 const shipAcceleration = 0.4;
 const shipMaxSpeed = 12;
 const shipMomentum = 0.95;

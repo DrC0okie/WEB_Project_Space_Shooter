@@ -1,4 +1,13 @@
 const {
+  Player,
+  Projectile,
+  MovedProjectileUpdate,
+  GameDeltaUpdate,
+  InitialGameState,
+  Vec2,
+} = require("../src/proto_gen/state_pb");
+
+const {
   canvasWidth,
   canvasHeight,
   playerWidth,
@@ -38,15 +47,74 @@ let projectiles = [];
 let newProjectilesBuffer = []; // To collect projectiles created in the current tick
 let nextProjectileId = 0;
 
+// Function to get current team counts
+function getTeamCounts() {
+  let redCount = 0;
+  let blueCount = 0;
+  Object.values(players).forEach((p) => {
+    if (p.team === "red") redCount++;
+    else if (p.team === "blue") blueCount++;
+  });
+  return { redCount, blueCount, totalCount: redCount + blueCount };
+}
+
 // Handle new player connections
 io.on("connection", (socket) => {
   console.log("New player connected:", socket.id);
 
+  // Emit current player counts to newly connected socket (for Home page)
+  socket.emit("player-counts", getTeamCounts());
+
+  socket.on("request-initial-player-counts", () => {
+    socket.emit("player-counts", getTeamCounts());
+  });
+
   // Handle player joining the game
   socket.on("join-game", (playerInfo) => {
+    const { nickname, team } = playerInfo; // Destructure team here
+
+    // Nickname Validation
+    if (
+      !nickname ||
+      typeof nickname !== "string" ||
+      nickname.length < 1 ||
+      nickname.length > 8
+    ) {
+      socket.emit("join-error", {
+        message: `Nickname must be between 1 and 8 characters.`,
+      });
+      console.log(`Player ${socket.id} rejected: invalid nickname.`);
+      return;
+    }
+
+    const currentCounts = getTeamCounts();
+
+    // Overall Player Cap Validation
+    if (currentCounts.totalCount >= 8) {
+      socket.emit("join-error", { message: "Game is full." });
+      console.log(`Player ${socket.id} rejected: game full.`);
+      return;
+    }
+
+    // Team Cap Validation
+    if (team === "red" && currentCounts.redCount >= 4) {
+      socket.emit("join-error", { message: "Red team is full." });
+      console.log(`Player ${socket.id} rejected: red team full.`);
+      return;
+    }
+    if (team === "blue" && currentCounts.blueCount >= 4) {
+      socket.emit("join-error", { message: "Blue team is full." });
+      console.log(`Player ${socket.id} rejected: blue team full.`);
+      return;
+    }
+
     const newPlayerId = socket.id;
     players[newPlayerId] = {
-      ...playerInfo,
+      nickname: nickname,
+      team: team,
+      x: Math.floor(Math.random() * (canvasWidth - playerWidth)),
+      y: Math.floor(Math.random() * (canvasHeight - playerHeight)),
+      angle: 0,
       health: playerHealth,
       score: 0,
       velocity: { x: 0, y: 0 },
@@ -55,20 +123,59 @@ io.on("connection", (socket) => {
       isTeleporting: false,
     };
 
-    // Send full current state only to the newly connected player
-    socket.emit("initial-game-state", {
-      allPlayers: players, // Current state of all players
-      allProjectiles: projectiles, // Current state of all projectiles
-      yourId: newPlayerId,
+    const initialStateProto = new InitialGameState();
+    initialStateProto.setYourId(newPlayerId);
+
+    const allPlayersMap = initialStateProto.getAllPlayersMap();
+    Object.values(players).forEach((pData) => {
+      const playerProto = new Player();
+      playerProto.setId(pData.id || newPlayerId);
+      playerProto.setNickname(pData.nickname);
+      playerProto.setTeam(pData.team);
+      const posVec = new Vec2();
+      posVec.setX(pData.x);
+      posVec.setY(pData.y);
+      playerProto.setPosition(posVec);
+      playerProto.setAngle(pData.angle);
+      const velVec = new Vec2();
+      velVec.setX(pData.velocity.x);
+      velVec.setY(pData.velocity.y);
+      playerProto.setVelocity(velVec);
+      playerProto.setHealth(pData.health);
+      playerProto.setScore(pData.score);
+      playerProto.setDeathCount(pData.deathCount);
+      allPlayersMap.set(pData.id || newPlayerId, playerProto);
     });
+
+    projectiles.forEach((projData) => {
+      const projectileProto = new Projectile();
+      projectileProto.setId(projData.id);
+      projectileProto.setOwnerId(projData.owner);
+      const projPosVec = new Vec2();
+      projPosVec.setX(projData.x);
+      projPosVec.setY(projData.y);
+      projectileProto.setPosition(projPosVec);
+      const projDirVec = new Vec2();
+      projDirVec.setX(projData.direction.x);
+      projDirVec.setY(projData.direction.y);
+      projectileProto.setDirection(projDirVec);
+      initialStateProto.addAllProjectiles(projectileProto);
+    });
+
+    const serializedInitialState = initialStateProto.serializeBinary(); // Uint8Array
+    socket.emit("initial-game-state-proto", serializedInitialState);
 
     console.log(
       "Player",
       newPlayerId,
-      "joined the game, ",
+      `(${players[newPlayerId].nickname})`,
+      "joined",
+      team,
+      "team.",
       Object.keys(players).length,
-      "players in total"
+      "players in total."
     );
+    io.emit("player-counts", getTeamCounts());
   });
 
   // Handle player movement
@@ -101,7 +208,6 @@ io.on("connection", (socket) => {
   socket.on("teleport-initiate", () => {
     const player = players[socket.id];
     if (player && player.health > 0 && !player.isTeleporting) {
-      // Check !player.isTeleporting
       const teleportDistance = teleportEffectDistance;
       const targetPosition = {
         x: player.x + Math.cos(player.angle) * teleportDistance,
@@ -111,31 +217,35 @@ io.on("connection", (socket) => {
       player.x = targetPosition.x;
       player.y = targetPosition.y;
       player.changedSinceLastTick = true;
-      player.isTeleporting = true; // Set the flag
+      player.isTeleporting = true;
 
       io.emit("teleport", { playerId: socket.id, targetPosition });
 
       // Reset the flag after a very short delay (e.g., one or two game ticks)
-      // This gives the teleported position a chance to "settle" in the delta update
-      // without being immediately overwritten by a move packet that was already in flight.
       setTimeout(() => {
         if (players[socket.id]) {
           // Player might disconnect
           players[socket.id].isTeleporting = false;
-          // console.log(`[SERVER] Player ${socket.id} teleporting flag reset.`);
         }
-      }, serverRefreshRate * 2); // e.g., 2 server ticks
+      }, serverRefreshRate * 2);
     }
   });
+
   // Handle player disconnection
   socket.on("disconnect", () => {
-    removePlayer(socket.id);
-    console.log(
-      "Player disconnected:",
-      socket.id,
-      Object.keys(players).length,
-      "players remaining"
-    );
+    const player = players[socket.id];
+    if (player) {
+      const wasRemoved = removePlayer(socket.id);
+      if (wasRemoved) {
+        console.log(
+          "Player disconnected:",
+          socket.id,
+          Object.keys(players).length,
+          "players remaining"
+        );
+        io.emit("player-counts", getTeamCounts());
+      }
+    }
   });
 });
 
@@ -158,7 +268,7 @@ const updateProjectilesAndDetectCollisions = () => {
     );
     if (newDirectionMagnitude === 0) {
       // Avoid division by zero
-      destroyedProjectileIds.add(projectile.id); // Or handle differently
+      destroyedProjectileIds.add(projectile.id);
       return false;
     }
     projectile.direction.x =
@@ -236,8 +346,6 @@ const updateProjectilesAndDetectCollisions = () => {
                 player.y = Math.floor(Math.random() * canvasPaddingHeight);
                 player.health = playerHealth;
                 player.changedSinceLastTick = true;
-                // Send specific respawn event, client will update based on this
-                // Or, the 'changedSinceLastTick' will ensure it's in the next delta update
                 io.emit("respawn-player", { playerId: id, player });
               }, respawnTimeMs);
             }
@@ -257,10 +365,13 @@ const updateProjectilesAndDetectCollisions = () => {
 
 // Remove a player from the game
 const removePlayer = (playerId) => {
-  console.log("Player", playerId, "is out of the game");
-  io.emit("player-removed", playerId);
-  delete players[playerId];
-  io.emit("update-players", players);
+  if (players[playerId]) {
+    io.emit("player-removed", playerId);
+    delete players[playerId];
+    io.emit("update-players", players);
+    return true; // Indicate player was found and removed
+  }
+  return false; // Indicate player was not found
 };
 
 // Check if the game is over by counting the number of players left in each team
@@ -321,50 +432,98 @@ const checkGameOver = (playerIdJustDied) => {
   if (winner) {
     console.log(`${winner} team wins!`);
     io.emit("game-over", { winner });
-    // Potentially reset game or clear players for a new round after a delay
   }
 };
 
 /// Game Loop
 setInterval(() => {
   const projectileChanges = updateProjectilesAndDetectCollisions();
-  const playerUpdates = {};
+  const playerUpdates = {}; // Still collect JS objects first for easier logic
 
   Object.keys(players).forEach((id) => {
     const player = players[id];
     if (player.changedSinceLastTick) {
-      // Create a snapshot of the player data to send
-      // Avoid sending internal flags like 'changedSinceLastTick'
-      const { changedSinceLastTick, ...playerDataToSend } = player;
+      const { changedSinceLastTick, isTeleporting, ...playerDataToSend } =
+        player; // Exclude internal flags
       playerUpdates[id] = playerDataToSend;
-      player.changedSinceLastTick = false; // Reset flag
+      player.changedSinceLastTick = false;
     }
   });
 
-  // Construct the delta update payload
-  const deltaUpdate = {};
   let somethingChanged = false;
+  const deltaUpdateProto = new GameDeltaUpdate(); // Create the protobuf message
 
+  // Populate Player updates
   if (Object.keys(playerUpdates).length > 0) {
-    deltaUpdate.players = playerUpdates;
+    const playersMap = deltaUpdateProto.getPlayersMap();
+    Object.entries(playerUpdates).forEach(([pId, pData]) => {
+      const playerProto = new Player();
+      playerProto.setId(pId);
+      playerProto.setNickname(pData.nickname);
+      playerProto.setTeam(pData.team);
+      const posVec = new Vec2();
+      posVec.setX(pData.x);
+      posVec.setY(pData.y);
+      playerProto.setPosition(posVec);
+      playerProto.setAngle(pData.angle);
+      const velVec = new Vec2();
+      velVec.setX(pData.velocity.x);
+      velVec.setY(pData.velocity.y);
+      playerProto.setVelocity(velVec);
+      playerProto.setHealth(pData.health);
+      playerProto.setScore(pData.score);
+      playerProto.setDeathCount(pData.deathCount);
+      playersMap.set(pId, playerProto);
+    });
     somethingChanged = true;
   }
+
+  // Populate New Projectiles
   if (newProjectilesBuffer.length > 0) {
-    // Send a copy of the buffer's contents
-    deltaUpdate.newProjectiles = newProjectilesBuffer.map((p) => ({ ...p }));
+    newProjectilesBuffer.forEach((projData) => {
+      const projectileProto = new Projectile();
+      projectileProto.setId(projData.id);
+      projectileProto.setOwnerId(projData.owner);
+      const projPosVec = new Vec2();
+      projPosVec.setX(projData.x);
+      projPosVec.setY(projData.y);
+      projectileProto.setPosition(projPosVec);
+      const projDirVec = new Vec2();
+      projDirVec.setX(projData.direction.x);
+      projDirVec.setY(projData.direction.y);
+      projectileProto.setDirection(projDirVec);
+      deltaUpdateProto.addNewProjectiles(projectileProto);
+    });
     somethingChanged = true;
   }
+
+  // Populate Moved Projectiles
   if (Object.keys(projectileChanges.updatedProjectilePositions).length > 0) {
-    deltaUpdate.movedProjectiles = projectileChanges.updatedProjectilePositions;
+    Object.entries(projectileChanges.updatedProjectilePositions).forEach(
+      ([idStr, posData]) => {
+        const movedProjectileUpdateProto = new MovedProjectileUpdate();
+        movedProjectileUpdateProto.setId(parseInt(idStr));
+        const projPosVec = new Vec2();
+        projPosVec.setX(posData.x);
+        projPosVec.setY(posData.y);
+        movedProjectileUpdateProto.setPosition(projPosVec);
+        deltaUpdateProto.addMovedProjectiles(movedProjectileUpdateProto);
+      }
+    );
     somethingChanged = true;
   }
+
+  // Populate Destroyed Projectile IDs
   if (projectileChanges.destroyedProjectileIds.length > 0) {
-    deltaUpdate.destroyedProjectiles = projectileChanges.destroyedProjectileIds;
+    projectileChanges.destroyedProjectileIds.forEach((id) => {
+      deltaUpdateProto.addDestroyedProjectileIds(id);
+    });
     somethingChanged = true;
   }
 
   if (somethingChanged) {
-    io.emit("game-delta-update", deltaUpdate);
+    const serializedDelta = deltaUpdateProto.serializeBinary(); // This is a Uint8Array
+    io.emit("game-delta-update-proto", serializedDelta);
   }
   newProjectilesBuffer = [];
 }, serverRefreshRate);

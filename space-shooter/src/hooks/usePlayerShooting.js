@@ -1,6 +1,5 @@
 import { useEffect } from "react";
 import { playerHeight, playerWidth } from "../constants";
-//import shootMP3 from '../assets/sounds/shoot.mp3'; TODO: Repeating shootings with audio causes problems
 
 const halfPlayerHeight = playerHeight / 2;
 const halfPlayerWidth = playerWidth / 2;

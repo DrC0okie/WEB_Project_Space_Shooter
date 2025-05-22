@@ -8,6 +8,8 @@ import {
   teleportEffectDuration,
 } from "../constants";
 
+import { InitialGameState, GameDeltaUpdate } from "../proto_gen/state_pb";
+
 const EXPLOSION_TOTAL_FRAMES = 8;
 const EXPLOSION_FRAME_DURATION = 150; // ms
 const EXPLOSION_ANIMATION_DURATION =
@@ -42,31 +44,65 @@ const useGameSocketEvents = (
   setRespawnCountdown
 ) => {
   const localPlayerIdRef = useRef(null);
-  const playerDiedIntervals = useRef({}); // Initialized to an empty object, this is good.
+  const playerDiedIntervals = useRef({});
 
   useEffect(() => {
-    // Declare effectCleanupIntervalId here so it's in scope for cleanup,
-    // even if the if-block isn't entered.
     let effectCleanupIntervalId = null;
 
     if (isSocketConnected && team && nickname && socket) {
-      // Added 'socket' to condition
-      // Join the game
-      const x = Math.floor(Math.random() * (canvasWidth - playerWidth));
-      const y = Math.floor(Math.random() * (canvasHeight - playerHeight));
       socket.emit("join-game", {
         team,
         nickname,
-        x,
-        y,
+        x: Math.floor(Math.random() * (canvasWidth - playerWidth)),
+        y: Math.floor(Math.random() * (canvasHeight - playerHeight)),
         angle: 0,
         velocity: { x: 0, y: 0 },
       });
 
-      // Socket event listeners
-      const handleInitialState = ({ allPlayers, allProjectiles, yourId }) => {
-        localPlayerIdRef.current = yourId;
+      // Deserialize and Convert for Initial State
+      const handleInitialStateProto = (binaryData) => {
+        const uint8ArrayData = new Uint8Array(binaryData);
+        const initialStateProto =
+          InitialGameState.deserializeBinary(uint8ArrayData);
+
+        localPlayerIdRef.current = initialStateProto.getYourId();
+
+        const allPlayers = {};
+        initialStateProto
+          .getAllPlayersMap()
+          .forEach((playerProto, playerId) => {
+            allPlayers[playerId] = {
+              id: playerProto.getId(), // Proto getters are getFieldName()
+              nickname: playerProto.getNickname(),
+              team: playerProto.getTeam(),
+              x: playerProto.getPosition().getX(),
+              y: playerProto.getPosition().getY(),
+              angle: playerProto.getAngle(),
+              velocity: {
+                x: playerProto.getVelocity().getX(),
+                y: playerProto.getVelocity().getY(),
+              },
+              health: playerProto.getHealth(),
+              score: playerProto.getScore(),
+              deathCount: playerProto.getDeathCount(),
+            };
+          });
+
+        const allProjectiles = initialStateProto
+          .getAllProjectilesList()
+          .map((projProto) => ({
+            id: projProto.getId(),
+            owner: projProto.getOwnerId(),
+            x: projProto.getPosition().getX(),
+            y: projProto.getPosition().getY(),
+            direction: {
+              x: projProto.getDirection().getX(),
+              y: projProto.getDirection().getY(),
+            },
+          }));
+
         setGameState({ players: allPlayers, projectiles: allProjectiles });
+
         const initialScores = {};
         Object.values(allPlayers).forEach((p) => {
           if (p.nickname) initialScores[p.nickname] = p.score;
@@ -74,47 +110,95 @@ const useGameSocketEvents = (
         setAllPlayerScores(initialScores);
       };
 
-      const handleDeltaUpdate = (delta) => {
+      // Deserialize and Convert for Delta Update
+      const handleDeltaUpdateProto = (binaryData) => {
+        const uint8ArrayData = new Uint8Array(binaryData);
+        const deltaProto = GameDeltaUpdate.deserializeBinary(uint8ArrayData);
+
         setGameState((prevState) => {
           let newPlayers = { ...prevState.players };
           let newProjectiles = [...prevState.projectiles];
-          if (delta.players) {
-            Object.entries(delta.players).forEach(([playerId, playerData]) => {
-              newPlayers[playerId] = {
-                ...(newPlayers[playerId] || {}),
-                ...playerData,
+
+          // Apply player updates from proto
+          deltaProto.getPlayersMap().forEach((playerProto, playerId) => {
+            newPlayers[playerId] = {
+              ...(newPlayers[playerId] || {}),
+              id: playerProto.getId(),
+              nickname: playerProto.getNickname(),
+              team: playerProto.getTeam(),
+              x: playerProto.getPosition().getX(),
+              y: playerProto.getPosition().getY(),
+              angle: playerProto.getAngle(),
+              velocity: {
+                x: playerProto.getVelocity().getX(),
+                y: playerProto.getVelocity().getY(),
+              },
+              health: playerProto.getHealth(),
+              score: playerProto.getScore(),
+              deathCount: playerProto.getDeathCount(),
+            };
+          });
+
+          // Add new projectiles from proto
+          deltaProto.getNewProjectilesList().forEach((projProto) => {
+            if (
+              !newProjectiles.find(
+                (existingP) => existingP.id === projProto.getId()
+              )
+            ) {
+              newProjectiles.push({
+                id: projProto.getId(),
+                owner: projProto.getOwnerId(),
+                x: projProto.getPosition().getX(),
+                y: projProto.getPosition().getY(),
+                direction: {
+                  x: projProto.getDirection().getX(),
+                  y: projProto.getDirection().getY(),
+                },
+              });
+            }
+          });
+
+          // Update moved projectiles from proto
+          deltaProto.getMovedProjectilesList().forEach((movedUpdateProto) => {
+            const projectileId = movedUpdateProto.getId();
+            const newPositionProto = movedUpdateProto.getPosition(); // This is a Vec2 proto
+            const projectileIndex = newProjectiles.findIndex(
+              (p) => p.id === projectileId
+            );
+            if (projectileIndex !== -1 && newPositionProto) {
+              newProjectiles[projectileIndex] = {
+                ...newProjectiles[projectileIndex],
+                x: newPositionProto.getX(),
+                y: newPositionProto.getY(),
               };
-            });
-          }
-          if (delta.newProjectiles) {
-            delta.newProjectiles.forEach((p) => {
-              if (!newProjectiles.find((existingP) => existingP.id === p.id)) {
-                newProjectiles.push(p);
-              }
-            });
-          }
-          if (delta.movedProjectiles) {
-            newProjectiles = newProjectiles.map((p) => {
-              if (delta.movedProjectiles[p.id]) {
-                return { ...p, ...delta.movedProjectiles[p.id] };
-              }
-              return p;
-            });
-          }
-          if (delta.destroyedProjectiles) {
-            const destroyedIds = new Set(delta.destroyedProjectiles);
+            }
+          });
+
+          // Remove destroyed projectiles from proto
+          const destroyedIds = new Set(
+            deltaProto.getDestroyedProjectileIdsList()
+          );
+          if (destroyedIds.size > 0) {
             newProjectiles = newProjectiles.filter(
               (p) => !destroyedIds.has(p.id)
             );
           }
+
           return { players: newPlayers, projectiles: newProjectiles };
         });
-        if (delta.players) {
+
+        // Update separate allPlayerScores if player scores changed in the delta
+        if (deltaProto.getPlayersMap().getLength() > 0) {
           setAllPlayerScores((prevScores) => {
             const updatedScores = { ...prevScores };
-            Object.values(delta.players).forEach((pData) => {
-              if (pData.nickname && typeof pData.score === "number") {
-                updatedScores[pData.nickname] = pData.score;
+            deltaProto.getPlayersMap().forEach((playerProto, playerId) => {
+              if (
+                playerProto.getNickname() &&
+                typeof playerProto.getScore() === "number"
+              ) {
+                updatedScores[playerProto.getNickname()] =
+                  playerProto.getScore();
               }
             });
             return updatedScores;
@@ -200,17 +284,17 @@ const useGameSocketEvents = (
         });
       };
 
-      socket.on("initial-game-state", handleInitialState);
-      socket.on("game-delta-update", handleDeltaUpdate);
+      // Listen for new Protobuf event names
+      socket.on("initial-game-state-proto", handleInitialStateProto);
+      socket.on("game-delta-update-proto", handleDeltaUpdateProto);
+
       socket.on("player-removed", handlePlayerRemoved);
       socket.on("game-over", handleGameOver);
       socket.on("teleport", handleTeleport);
       socket.on("player-died", handlePlayerDied);
       socket.on("respawn-player", handleRespawnPlayer);
 
-      // Interval to clean up expired visual effects from client state
       effectCleanupIntervalId = setInterval(() => {
-        // Assign to the declared variable
         const now = Date.now();
         setTeleportEffect((prevEffects) =>
           prevEffects.filter(
@@ -225,29 +309,29 @@ const useGameSocketEvents = (
         );
       }, 1000);
 
-      // Cleanup function for this effect instance
+      // Cleanup function
       return () => {
-        socket.off("initial-game-state", handleInitialState);
-        socket.off("game-delta-update", handleDeltaUpdate);
+        // Turn off new proto listeners
+        socket.off("initial-game-state-proto", handleInitialStateProto);
+        socket.off("game-delta-update-proto", handleDeltaUpdateProto);
+
+        // Turn off other listeners
         socket.off("player-removed", handlePlayerRemoved);
         socket.off("game-over", handleGameOver);
         socket.off("teleport", handleTeleport);
         socket.off("player-died", handlePlayerDied);
         socket.off("respawn-player", handleRespawnPlayer);
 
-        // Clear all intervals created by this effect instance
         Object.values(playerDiedIntervals.current).forEach(clearInterval);
-        playerDiedIntervals.current = {}; // Important to reset for next effect run
+        playerDiedIntervals.current = {};
 
         if (effectCleanupIntervalId) {
-          // Only clear if it was set
           clearInterval(effectCleanupIntervalId);
         }
       };
     }
-    // If the main condition (isSocketConnected etc.) is false,
-    // we still need a cleanup for any intervals from a *previous* run of this effect
-    // where the condition was true.
+
+    // Cleanup for when the main if-condition is false
     return () => {
       Object.values(playerDiedIntervals.current).forEach(clearInterval);
       playerDiedIntervals.current = {};
@@ -259,7 +343,7 @@ const useGameSocketEvents = (
     isSocketConnected,
     team,
     nickname,
-    socket, // Make sure socket is stable or included if it can change
+    socket,
     setGameState,
     setAllPlayerScores,
     setWinner,

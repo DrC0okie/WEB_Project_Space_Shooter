@@ -1,5 +1,5 @@
-import React, { useRef, useEffect, useState } from "react"; // Ensure useState is imported
-import { canvasHeight, canvasWidth, blackHole } from "../constants"; // teleportEffectDuration no longer needed here
+import { useRef, useEffect, useState } from "react";
+import { canvasHeight, canvasWidth, blackHole } from "../constants";
 import {
   drawBackground,
   drawBlackHole,
@@ -40,7 +40,7 @@ const GameCanvas = ({
   const [loadedImages, setLoadedImages] = useState(null);
   const animationFrameId = useRef(null);
 
-  // THIS IS THE KEY CHANGE: Define latestPropsRef at the top level
+  // Define latestPropsRef at the top level
   const latestPropsRef = useRef({
     players,
     projectiles,
@@ -49,7 +49,7 @@ const GameCanvas = ({
     explosions,
   });
 
-  // Effect 1: Load images ONCE when component mounts
+  // Load images once when component mounts
   useEffect(() => {
     const imagesToLoad = {
       backgroundImg: backgroundSrc,
@@ -85,8 +85,7 @@ const GameCanvas = ({
       });
   }, []); // Empty dependency array: runs only once on mount
 
-  // Effect 2: Update latestPropsRef.current WHENEVER props change
-  // THIS IS ALSO AT THE TOP LEVEL
+  // Update latestPropsRef.current whenever props change
   useEffect(() => {
     latestPropsRef.current = {
       players,
@@ -97,7 +96,7 @@ const GameCanvas = ({
     };
   }, [players, projectiles, teleportEffect, respawnCountdown, explosions]);
 
-  // Effect 3: The main rendering loop
+  // The main rendering loop
   useEffect(() => {
     if (!loadedImages || !canvasRef.current) {
       return; // Don't start if images or canvas aren't ready
@@ -169,7 +168,7 @@ const GameCanvas = ({
         cancelAnimationFrame(animationFrameId.current);
       }
     };
-  }, [loadedImages]); // This effect re-runs ONLY if `loadedImages` changes.
+  }, [loadedImages]); // This effect re-runs only if `loadedImages` changes.
 
   if (!loadedImages) {
     return <div>Loading game assets...</div>;
