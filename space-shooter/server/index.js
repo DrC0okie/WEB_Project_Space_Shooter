@@ -1,3 +1,8 @@
+const express = require("express");
+const http = require("http");
+const { Server } = require("socket.io");
+const path = require("path");
+
 const {
   Player,
   Projectile,
@@ -30,9 +35,6 @@ const {
 // Import utility functions for gravity calculations
 const { calculateGravitationalForce, isWithinBlackHole } = require("./gravity");
 
-// Initialize Socket.io server with CORS configuration
-const io = require("socket.io")(serverPort, { cors: { origin: "*" } });
-
 // Define canvas padding and projectile padding values for boundary checks
 const canvasPaddingWidth = canvasWidth - playerWidth;
 const canvasPaddingHeight = canvasHeight - playerHeight;
@@ -40,6 +42,24 @@ const projectilePadding = projectileRadius * 4;
 const filterPaddingRight = canvasWidth + projectilePadding;
 const filterPaddingBottom = canvasHeight + projectilePadding;
 const respawnTimeMs = respawnTimeSeconds * 1000;
+
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server, {
+  // Attach Socket.IO to the http server
+  cors: {
+    origin: "*",
+  },
+});
+
+// Serve static files from the React build
+// The Dockerfile places the build into ./public/build
+app.use(express.static(path.join(__dirname, "../public/build")));
+
+// Serve index.html for any other routes (for client-side routing)
+app.get(/^\/(?!api).*/, (req, res) => {
+  res.sendFile(path.join(__dirname, "../public/build", "index.html"));
+});
 
 // Initialize players and projectiles objects
 let players = {};
@@ -528,4 +548,10 @@ setInterval(() => {
   newProjectilesBuffer = [];
 }, serverRefreshRate);
 
-console.log("Server is running on port ", serverPort);
+// Start the server
+server.listen(serverPort, () => {
+  console.log(`Server is running on port ${serverPort}`);
+  console.log(
+    `Serving static files from: ${path.join(__dirname, "../public/build")}`
+  );
+});
